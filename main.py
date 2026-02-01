@@ -28,13 +28,10 @@ def safe_name(name: str) -> str:
     name = (name or "").strip()
     out = []
     for ch in name:
-        if ch in INVALID_FS_CHARS:
+        if ch in INVALID_FS_CHARS or ord(ch) < 32:
             out.append("_")
-            continue
-        if ord(ch) < 32:
-            out.append("_")
-            continue
-        out.append(ch)
+        else:
+            out.append(ch)
     s = "".join(out)
     s = re.sub(r"\s+", " ", s).strip()
     return s[:180] if len(s) > 180 else s
@@ -139,6 +136,8 @@ def filename_from_filetitle_or_url(file_title: str, url: str | None) -> str:
             return base
     return "image.bin"
 
+def should_download_by_filename(char: str, file_title: str) -> bool:
+    return char.lower() in file_title.split("File:", 1)[-1].lower()
 
 def download_file(session: requests.Session, url: str, out_path: Path) -> bool:
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -236,29 +235,39 @@ def main():
         char_dir = root_out / safe_name(char)
 
         for variant, files in variants.items():
+            if char.lower() not in (variant or "").lower():
+                print(f"  ├─ (skip:section-name-no-char) {variant}")
+                continue
+
             variant_dir = char_dir / safe_name(variant if variant else "Default")
 
             print(f"  ├─ {variant} ({len(files)})")
             for file_title in files:
+                fname = file_title.split("File:", 1)[-1]
+                keep = should_download_by_filename(char, file_title)
+                if not keep:
+                    reason = "no char match"
+                    print(f"  │   └─ (skip:{reason}) {fname}")
+                    continue
+
                 url = get_file_direct_url(session, file_title)
                 time.sleep(RATE_LIMIT_SEC)
                 if not url:
-                    print(f"  │   └─ (skip) {file_title} (no url)")
+                    print(f"  │   └─ (skip:no-url) {fname}")
                     continue
 
-                fname = filename_from_filetitle_or_url(file_title, url)
-                out_path = variant_dir / fname
+                out_path = variant_dir / filename_from_filetitle_or_url(file_title, url)
 
                 if out_path.exists() and out_path.stat().st_size > 0:
-                    print(f"  │   └─ (exists) {fname}")
+                    print(f"  │   └─ (exists) {out_path.name}")
                     continue
 
                 ok = download_file(session, url, out_path)
                 time.sleep(RATE_LIMIT_SEC)
                 if ok:
-                    print(f"  │   └─ (saved) {fname}")
+                    print(f"  │   └─ (saved)  {out_path.name}")
                 else:
-                    print(f"  │   └─ (fail)  {fname}")
+                    print(f"  │   └─ (fail)   {out_path.name}")
 
 
 if __name__ == "__main__":
