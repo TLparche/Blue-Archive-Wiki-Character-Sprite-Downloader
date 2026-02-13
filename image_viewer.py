@@ -1,22 +1,17 @@
 import sys
 import os
 from pathlib import Path
-
-from PyQt6.QtCore import Qt, QMimeData, QUrl
+from PyQt6.QtCore import Qt, QMimeData, QUrl, QEvent
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QListWidget, QScrollArea, QGridLayout, QLabel)
-from PyQt6.QtGui import QPixmap, QImage
-
-DISPLAY_WIDTH = 380
+from PyQt6.QtGui import QPixmap, QImage, QKeySequence, QShortcut
 
 
 class ImageCard(QLabel):
-
-    def __init__(self, image_path, parent=None):
+    def __init__(self, image_path, width, parent=None):
         super().__init__(parent)
         self.image_path = str(Path(image_path).resolve())
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-
         self.setStyleSheet("""
             QLabel {
                 background-color: #f0f0f0; 
@@ -28,8 +23,10 @@ class ImageCard(QLabel):
             }
         """)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setFixedSize(DISPLAY_WIDTH, int(DISPLAY_WIDTH * 0.25))
+        self.update_display_size(width)
 
+    def update_display_size(self, width):
+        self.setFixedSize(width, int(width * 0.25))
         self.load_thumbnail()
 
     def load_thumbnail(self):
@@ -52,7 +49,6 @@ class ImageCard(QLabel):
         mime_data = QMimeData()
         url = QUrl.fromLocalFile(self.image_path)
         mime_data.setUrls([url])
-
         clipboard.setMimeData(mime_data)
 
         self.window().reset_selections()
@@ -71,10 +67,14 @@ class ImageCard(QLabel):
 class ViewerWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ChatImg Viewer & Copier (PyQt6 - File Copy Mode)")
+        self.setWindowTitle("ChatImg Viewer")
         self.resize(1400, 800)
-
         self.root_dir = Path("./chatimg")
+
+        self.current_img_width = 380
+        self.min_width = 100
+        self.max_width = 1200
+        self.zoom_step = 40
 
         self.init_ui()
         self.load_character_list()
@@ -100,22 +100,62 @@ class ViewerWindow(QMainWindow):
         self.lbl_info.setStyleSheet("font-size: 14px; margin-bottom: 5px;")
         right_layout.addWidget(self.lbl_info)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("background-color: white; border: 1px solid #ccc;")
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("background-color: white; border: 1px solid #ccc;")
+        self.scroll.viewport().installEventFilter(self)
 
         self.scroll_content = QWidget()
         self.grid_layout = QGridLayout(self.scroll_content)
         self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.grid_layout.setSpacing(15)
 
-        scroll.setWidget(self.scroll_content)
-        right_layout.addWidget(scroll)
+        self.scroll.setWidget(self.scroll_content)
+        right_layout.addWidget(self.scroll)
 
         main_layout.addLayout(left_layout)
         main_layout.addLayout(right_layout)
 
         self.statusBar().showMessage(f"저장 경로: {self.root_dir.resolve()}")
+
+    def eventFilter(self, source, event):
+        if source == self.scroll.viewport() and event.type() == QEvent.Type.Wheel:
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                delta = event.angleDelta().y()
+                if delta > 0:
+                    self.zoom_in()
+                else:
+                    self.zoom_out()
+                return True
+        return super().eventFilter(source, event)
+
+    def keyPressEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self.zoom_in()
+            elif event.key() == Qt.Key.Key_Minus:
+                self.zoom_out()
+            else:
+                super().keyPressEvent(event)
+        else:
+            super().keyPressEvent(event)
+
+    def zoom_in(self):
+        if self.current_img_width < self.max_width:
+            self.current_img_width += self.zoom_step
+            self.apply_zoom()
+
+    def zoom_out(self):
+        if self.current_img_width > self.min_width:
+            self.current_img_width -= self.zoom_step
+            self.apply_zoom()
+
+    def apply_zoom(self):
+        self.lbl_info.setText(f"🔍 줌 레벨: {self.current_img_width}px")
+        for i in range(self.grid_layout.count()):
+            widget = self.grid_layout.itemAt(i).widget()
+            if isinstance(widget, ImageCard):
+                widget.update_display_size(self.current_img_width)
 
     def load_character_list(self):
         self.char_list_widget.clear()
@@ -139,12 +179,12 @@ class ViewerWindow(QMainWindow):
         valid_ext = {'.png', '.jpg', '.jpeg'}
         images = sorted([p for p in folder_path.iterdir() if p.suffix.lower() in valid_ext], key=lambda x: x.name)
 
-        self.lbl_info.setText(f"📂 {folder_path.name} - {len(images)}개의 이미지 (클릭하여 복사)")
+        self.lbl_info.setText(f"📂 {folder_path.name} - {len(images)}개의 이미지")
 
         cols = 3
         row, col = 0, 0
         for img_path in images:
-            card = ImageCard(img_path)
+            card = ImageCard(img_path, self.current_img_width)
             self.grid_layout.addWidget(card, row, col)
             col += 1
             if col >= cols:
