@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.13"
 dependencies = [
     "beautifulsoup4>=4.14.3",
+    "keyboard>=0.13.5",
     "pillow>=12.1.0",
     "pyqt6>=6.10.2",
     "requests>=2.32.5",
