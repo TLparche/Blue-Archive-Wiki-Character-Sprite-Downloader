@@ -210,7 +210,7 @@ def collect_sprites_by_variant(session: requests.Session, char: str) -> dict[str
 
 def main():
     character_names = [
-        "Neru"
+        "Rin"
     ]
 
     root_out = Path("images")

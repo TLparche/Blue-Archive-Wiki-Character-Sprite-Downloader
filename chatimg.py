@@ -251,11 +251,25 @@ class ChatImageBuilder:
             if img.size != (img_w, img_h):
                 img = img.resize((img_w, img_h), Image.Resampling.LANCZOS)
 
-            out = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
-            out.paste(img, (50, 0))
+            margin = 50
 
-            out_path = next_available_path(out_char_dir, img_path.name)
-            out.save(out_path, format="PNG")
+            out_left = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+            x_left = margin
+            out_left.paste(img, (x_left, 0))
+
+            left_name = f"{img_path.stem}_left{img_path.suffix}"
+            out_left_path = next_available_path(out_char_dir, left_name)
+            out_left.save(out_left_path, format="PNG")
+            success += 1
+
+            out_right = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+            x_right = out_w - img_w - margin
+            x_right = max(0, x_right)
+            out_right.paste(img, (x_right, 0))
+
+            right_name = f"{img_path.stem}_right{img_path.suffix}"
+            out_right_path = next_available_path(out_char_dir, right_name)
+            out_right.save(out_right_path, format="PNG")
             success += 1
 
         if success == 0:
