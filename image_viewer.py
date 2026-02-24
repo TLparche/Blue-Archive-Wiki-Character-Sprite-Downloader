@@ -4,13 +4,17 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, QMimeData, QUrl, QEvent
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QListWidget, QScrollArea, QGridLayout, QLabel)
-from PyQt6.QtGui import QPixmap, QImage, QKeySequence, QShortcut
+from PyQt6.QtGui import QPixmap, QImage, QKeySequence, QShortcut, QPainter, QPen
 
 
 class ImageCard(QLabel):
-    def __init__(self, image_path, width, parent=None):
+    def __init__(self, emotion_image_path, chatimg_dir: Path, char_name: str, width, scale=0.5, parent=None):
         super().__init__(parent)
-        self.image_path = str(Path(image_path).resolve())
+        self.emotion_path = Path(emotion_image_path).resolve()
+        self.chatimg_dir = Path(chatimg_dir).resolve()
+        self.char_name = char_name
+        self.scale = float(scale)
+
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet("""
             QLabel {
@@ -23,32 +27,71 @@ class ImageCard(QLabel):
             }
         """)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.update_display_size(width)
+        self.update_display_size(scale)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
-    def update_display_size(self, width):
-        self.setFixedSize(width, int(width * 0.25))
-        self.load_thumbnail()
+    def update_display_size(self, scale: float):
+        pad_x = 0
+        base_w, base_h = 370, 185
 
-    def load_thumbnail(self):
-        pix = QPixmap(self.image_path)
-        if not pix.isNull():
-            scaled = pix.scaled(
-                self.width(),
-                self.height(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.setPixmap(scaled)
+        s = float(scale)
+        img_w = max(1, int(base_w * s))
+        img_h = max(1, int(base_h * s))
+
+        self.setFixedSize(img_w + 2 * pad_x, img_h)
+        self.load_thumbnail(img_w, img_h, pad_x)
+
+    def load_thumbnail(self, img_w, img_h, pad_x):
+        pix = QPixmap(str(self.emotion_path))
+        if pix.isNull():
+            return
+
+        thumb = pix.scaled(
+            img_w, img_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+
+        W, H = self.width(), self.height()
+
+        canvas = QPixmap(W, H)
+        canvas.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(canvas)
+
+        x = (W - thumb.width()) // 2
+        y = (H - thumb.height()) // 2
+        painter.drawPixmap(x, y, thumb)
+
+        pen = QPen(Qt.GlobalColor.lightGray)
+        pen.setWidth(2)
+        painter.setPen(pen)
+        x_mid = W // 2
+        painter.drawLine(x_mid, 0, x_mid, H)
+
+        painter.end()
+        self.setPixmap(canvas)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.copy_to_clipboard()
+        x = int(event.position().x())
+        side = "right" if x >= (self.width() // 2) else "left"
+        self.copy_variant_to_clipboard(side)
+        event.accept()
+        return
 
-    def copy_to_clipboard(self):
+    def copy_variant_to_clipboard(self, side: str):
+        stem = self.emotion_path.stem
+        suffix = self.emotion_path.suffix
+
+        target = (self.chatimg_dir / self.char_name / f"{stem}_{side}{suffix}").resolve()
+
+        if not target.exists():
+            self.window().statusBar().showMessage(f"대상 파일이 없음: {target.name}", 2500)
+            return
+
         clipboard = QApplication.clipboard()
         mime_data = QMimeData()
-        url = QUrl.fromLocalFile(self.image_path)
-        mime_data.setUrls([url])
+        mime_data.setUrls([QUrl.fromLocalFile(str(target))])
         clipboard.setMimeData(mime_data)
 
         self.window().reset_selections()
@@ -59,9 +102,11 @@ class ImageCard(QLabel):
                 border-radius: 5px;
             }
         """)
+        self.window().statusBar().showMessage(
+            f"파일 복사 완료! ({side}) (Ctrl+V): {target.name}", 2000
+        )
 
-        filename = os.path.basename(self.image_path)
-        self.window().statusBar().showMessage(f"파일 복사 완료! (Ctrl+V): {filename}", 2000)
+
 
 
 class ViewerWindow(QMainWindow):
@@ -69,12 +114,14 @@ class ViewerWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("ChatImg Viewer")
         self.resize(1400, 800)
-        self.root_dir = Path("./chatimg")
+        self.emotion_dir = Path("./emotion")
+        self.chatimg_dir = Path("./chatimg")
+        self.root_dir = self.emotion_dir
 
-        self.current_img_width = 380
-        self.min_width = 100
-        self.max_width = 1200
-        self.zoom_step = 40
+        self.scale = 1.0
+        self.min_scale = 0.25
+        self.max_scale = 3.0
+        self.zoom_step = 0.1
 
         self.init_ui()
         self.load_character_list()
@@ -116,7 +163,9 @@ class ViewerWindow(QMainWindow):
         main_layout.addLayout(left_layout)
         main_layout.addLayout(right_layout)
 
-        self.statusBar().showMessage(f"저장 경로: {self.root_dir.resolve()}")
+        self.statusBar().showMessage(
+            f"표시: {self.emotion_dir.resolve()} | 복사: {self.chatimg_dir.resolve()}"
+        )
 
     def eventFilter(self, source, event):
         if source == self.scroll.viewport() and event.type() == QEvent.Type.Wheel:
@@ -141,21 +190,21 @@ class ViewerWindow(QMainWindow):
             super().keyPressEvent(event)
 
     def zoom_in(self):
-        if self.current_img_width < self.max_width:
-            self.current_img_width += self.zoom_step
+        if self.scale < self.max_scale:
+            self.scale = min(self.max_scale, self.scale + self.zoom_step)
             self.apply_zoom()
 
     def zoom_out(self):
-        if self.current_img_width > self.min_width:
-            self.current_img_width -= self.zoom_step
+        if self.scale > self.min_scale:
+            self.scale = max(self.min_scale, self.scale - self.zoom_step)
             self.apply_zoom()
 
     def apply_zoom(self):
-        self.lbl_info.setText(f"🔍 줌 레벨: {self.current_img_width}px")
+        self.lbl_info.setText(f"🔍 Scale: {int(self.scale * 100)}%")
         for i in range(self.grid_layout.count()):
             widget = self.grid_layout.itemAt(i).widget()
             if isinstance(widget, ImageCard):
-                widget.update_display_size(self.current_img_width)
+                widget.update_display_size(self.scale)
 
     def load_character_list(self):
         self.char_list_widget.clear()
@@ -184,7 +233,14 @@ class ViewerWindow(QMainWindow):
         cols = 3
         row, col = 0, 0
         for img_path in images:
-            card = ImageCard(img_path, self.current_img_width)
+            card = ImageCard(
+                img_path,
+                self.chatimg_dir,
+                folder_path.name,
+                0,
+                scale=self.scale,
+            )
+
             self.grid_layout.addWidget(card, row, col)
             col += 1
             if col >= cols:
